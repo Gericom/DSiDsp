@@ -3,6 +3,7 @@
 #include "dsp.h"
 #include "dsp_pipe.h"
 #include "dsp_coff.h"
+#include "dsp_dsp1.h"
 #include "DspProcess.h"
 
 static DspProcess* sDspProcess = NULL;
@@ -66,20 +67,20 @@ bool DspProcess::SetMemoryMapping(bool isCode, u32 addr, u32 len, bool toDsp)
     return true;
 }
 
-bool DspProcess::EnumerateSections(dsp_process_sec_callback_t callback)
+bool DspProcess::EnumerateSectionsCoff(dsp_process_sec_callback_t callback)
 {
     if(!callback)
         return false;
     dsp_coff_header_t coffHeader;
-    fseek(_coffFile, 0, SEEK_SET);
-    if(fread(&coffHeader, 1, sizeof(dsp_coff_header_t), _coffFile) != sizeof(dsp_coff_header_t))
+    fseek(_dspFile, 0, SEEK_SET);
+    if(fread(&coffHeader, 1, sizeof(dsp_coff_header_t), _dspFile) != sizeof(dsp_coff_header_t))
         return false;
     int sectabOffset = sizeof(dsp_coff_header_t) + coffHeader.optHdrLength;
     dsp_coff_section_t section;
     for(int i = 0; i < coffHeader.nrSections; i++)
     {
-        fseek(_coffFile, sectabOffset + i * sizeof(dsp_coff_section_t), SEEK_SET);
-        if(fread(&section, 1, sizeof(dsp_coff_section_t), _coffFile) != sizeof(dsp_coff_section_t))
+        fseek(_dspFile, sectabOffset + i * sizeof(dsp_coff_section_t), SEEK_SET);
+        if(fread(&section, 1, sizeof(dsp_coff_section_t), _dspFile) != sizeof(dsp_coff_section_t))
             return false;
         if((section.flags & DSP_COFF_SECT_FLAG_BLK_HDR) || section.size == 0)
             continue;
@@ -89,14 +90,14 @@ bool DspProcess::EnumerateSections(dsp_process_sec_callback_t callback)
     return true;
 }
 
-bool DspProcess::LoadSection(const dsp_coff_header_t* header, const dsp_coff_section_t* section)
+bool DspProcess::LoadSectionCoff(const dsp_coff_header_t* header, const dsp_coff_section_t* section)
 {
     const char* name = (const char*)section->name.name;
     char fullName[128];
     if(section->name.zeroIfLong == 0)
     {
-        fseek(_coffFile, header->symTabPtr + 0x12 * header->nrSyms + section->name.longNameOffset, SEEK_SET);
-        fread(fullName, 1, sizeof(fullName), _coffFile);
+        fseek(_dspFile, header->symTabPtr + 0x12 * header->nrSyms + section->name.longNameOffset, SEEK_SET);
+        fread(fullName, 1, sizeof(fullName), _dspFile);
         name = fullName;
     }
 
@@ -155,7 +156,7 @@ bool DspProcess::LoadSection(const dsp_coff_header_t* header, const dsp_coff_sec
         bool isCode = placements[i].isCode;
         bool noLoad = placements[i].noLoad;
         if(!noLoad)
-            fseek(_coffFile, section->sectionPtr, SEEK_SET);
+            fseek(_dspFile, section->sectionPtr, SEEK_SET);
         int dst = placements[i].address;
         int left = section->size;
         while(left > 0)
@@ -182,7 +183,7 @@ bool DspProcess::LoadSection(const dsp_coff_header_t* header, const dsp_coff_sec
                     twr_mapWramCSlot(slot, TWR_WRAM_C_SLOT_MASTER_ARM9, slot, true);
                 memset(DspToArm9Address(isCode, DSP_MEM_ADDR_TO_DSP(seg << TWR_WRAM_BC_SLOT_SHIFT)), 0, TWR_WRAM_BC_SLOT_SIZE);
             }
-            if(!noLoad && fread(DspToArm9Address(isCode, DSP_MEM_ADDR_TO_DSP(dst)), 1, len, _coffFile) != len)
+            if(!noLoad && fread(DspToArm9Address(isCode, DSP_MEM_ADDR_TO_DSP(dst)), 1, len, _dspFile) != len)
                 return false;
             left -= len;
             dst += len;
@@ -191,35 +192,29 @@ bool DspProcess::LoadSection(const dsp_coff_header_t* header, const dsp_coff_sec
     return true;
 }
 
-bool DspProcess::LoadProcess(const char* path, u16 slotB, u16 slotC)
+bool DspProcess::LoadProcessCoff(const char* path, u16 slotB, u16 slotC)
 {    
     _slotB = slotB;
     _slotC = slotC;
-    _coffFile = fopen(path, "rb");
-    if(!_coffFile)
+    _dspFile = fopen(path, "rb");
+    if(!_dspFile)
         return false;
 
-    bool ok = EnumerateSections(DspProcess::LoadSection);
+    bool ok = EnumerateSectionsCoff(DspProcess::LoadSectionCoff);
 
-    fclose(_coffFile);
-    _coffFile = NULL;
+    fclose(_dspFile);
+    _dspFile = NULL;
 
     if(!ok)
         return false;
 
-    SetMemoryMapping(true, 0, DSP_MEM_ADDR_TO_DSP(TWR_WRAM_BC_SLOT_SIZE * TWR_WRAM_BC_SLOT_COUNT), true);
-    SetMemoryMapping(false, 0, DSP_MEM_ADDR_TO_DSP(TWR_WRAM_BC_SLOT_SIZE * TWR_WRAM_BC_SLOT_COUNT), true);
+    SetMemoryMapping(true, 0, (TWR_WRAM_BC_SLOT_SIZE * TWR_WRAM_BC_SLOT_COUNT) >> 1, true);
+    SetMemoryMapping(false, 0, (TWR_WRAM_BC_SLOT_SIZE * TWR_WRAM_BC_SLOT_COUNT) >> 1, true);
     return true;
 }
 
-bool DspProcess::Execute(const char* path, u16 slotB, u16 slotC)
+bool DspProcess::Execute()
 {
-    if(sDspProcess)
-        return false;
-    
-    if(!LoadProcess(path, slotB, slotC))
-        return false;
-
     int irq = enterCriticalSection();
 	{
         sDspProcess = this;
@@ -238,8 +233,94 @@ bool DspProcess::Execute(const char* path, u16 slotB, u16 slotC)
         DspProcess::DspIrqHandler();
 	}
 	leaveCriticalSection(irq);
-    
     return true;
+}
+
+bool DspProcess::ExecuteCoff(const char* path, u16 slotB, u16 slotC)
+{
+    if(sDspProcess)
+        return false;
+    
+    if(!LoadProcessCoff(path, slotB, slotC))
+        return false;
+
+    return Execute();
+}
+
+bool DspProcess::ExecuteDsp1(const char* path)
+{
+    if(sDspProcess)
+        return false;
+
+    _dspFile = fopen(path, "rb");
+    if(!_dspFile)
+    {
+        printf("Failed opening file\n");
+        return false;
+    }
+    
+    dsp_dsp1_t* dsp1 = new dsp_dsp1_t;
+    fseek(_dspFile, 0, SEEK_SET);
+    if(fread(dsp1, 1, sizeof(dsp_dsp1_t), _dspFile) != sizeof(dsp_dsp1_t))
+    {
+        printf("Failed reading header\n");
+        fclose(_dspFile);
+        _dspFile = NULL;
+        delete dsp1;
+        return false;
+    }
+
+    if(dsp1->header.magic != DSP_DSP1_MAGIC)
+    {
+        printf("Invalid magic!");
+        fclose(_dspFile);
+        _dspFile = NULL;
+        delete dsp1;
+        return false;
+    }
+
+    _slotB = 0xFF;//dsp1->header.memoryLayout & 0xFF;
+    _slotC = 0xFF;//(dsp1->header.memoryLayout >> 8) & 0xFF;
+
+    _codeSegs = 0xFF;
+    _dataSegs = 0xFF;
+
+    for(int i = 0; i < TWR_WRAM_BC_SLOT_COUNT; i++)
+    {
+        _codeSlots[i] = i;
+        _dataSlots[i] = i;
+        twr_mapWramBSlot(i, TWR_WRAM_B_SLOT_MASTER_ARM9, i, true);
+        memset((void*)(twr_getBlockAddress(TWR_WRAM_BLOCK_B) + i * TWR_WRAM_BC_SLOT_SIZE), 0, TWR_WRAM_BC_SLOT_SIZE);
+        twr_mapWramCSlot(i, TWR_WRAM_C_SLOT_MASTER_ARM9, i, true);
+        memset((void*)(twr_getBlockAddress(TWR_WRAM_BLOCK_C) + i * TWR_WRAM_BC_SLOT_SIZE), 0, TWR_WRAM_BC_SLOT_SIZE);
+    }
+
+    if(dsp1->header.flags & DSP_DSP1_FLAG_SYNC_LOAD)
+        _flags |= DSP_PROCESS_FLAG_SYNC_LOAD;
+
+    for(int i = 0; i < dsp1->header.nrSegments; i++)
+    {
+        bool isCode = dsp1->segments[i].segmentType != DSP_DSP1_SEG_TYPE_DATA;
+        fseek(_dspFile, dsp1->segments[i].offset, SEEK_SET);
+        if(fread(DspToArm9Address(isCode, dsp1->segments[i].address), 1, dsp1->segments[i].size, _dspFile) != dsp1->segments[i].size)
+        {
+            printf("Failed reading segment\n");
+            fclose(_dspFile);
+            _dspFile = NULL;
+            delete dsp1;
+            return false;
+        }
+    }
+
+    fclose(_dspFile);
+    _dspFile = NULL;
+
+    SetMemoryMapping(true, 0, (TWR_WRAM_BC_SLOT_SIZE * TWR_WRAM_BC_SLOT_COUNT) >> 1, true);
+    SetMemoryMapping(false, 0, (TWR_WRAM_BC_SLOT_SIZE * TWR_WRAM_BC_SLOT_COUNT) >> 1, true);
+
+    delete dsp1;
+
+    return Execute();
 }
 
 void DspProcess::SetCallback(u32 sources, dsp_process_irq_callback_t func, void* arg)

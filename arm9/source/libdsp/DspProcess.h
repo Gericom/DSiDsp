@@ -17,7 +17,7 @@ typedef void (*dsp_process_irq_callback_t)(void* arg);
 
 class DspProcess
 {
-    FILE* _coffFile;
+    FILE* _dspFile;
     u16 _slotB;
     u16 _slotC;
     int _codeSegs;
@@ -45,15 +45,16 @@ class DspProcess
 
     bool SetMemoryMapping(bool isCode, u32 addr, u32 len, bool toDsp);
 
-    bool EnumerateSections(dsp_process_sec_callback_t callback);
+    bool EnumerateSectionsCoff(dsp_process_sec_callback_t callback);
 
-    bool LoadSection(const dsp_coff_header_t* header, const dsp_coff_section_t* section);
-    static bool LoadSection(DspProcess* process, const dsp_coff_header_t* header, const dsp_coff_section_t* section)
+    bool LoadSectionCoff(const dsp_coff_header_t* header, const dsp_coff_section_t* section);
+    static bool LoadSectionCoff(DspProcess* process, const dsp_coff_header_t* header, const dsp_coff_section_t* section)
     {
-        return process->LoadSection(header, section);
+        return process->LoadSectionCoff(header, section);
     }
 
-    bool LoadProcess(const char* path, u16 slotB, u16 slotC);
+    bool LoadProcessCoff(const char* path, u16 slotB, u16 slotC);
+    bool Execute();
 
 protected:
     void SetCallback(u32 sources, dsp_process_irq_callback_t func, void* arg);
@@ -63,5 +64,6 @@ protected:
 public:
     DspProcess(bool forceDspSyncLoad = false);
 
-    bool Execute(const char* path, u16 slotB, u16 slotC);
+    bool ExecuteCoff(const char* path, u16 slotB, u16 slotC);
+    bool ExecuteDsp1(const char* path);
 };

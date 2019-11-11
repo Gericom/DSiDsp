@@ -62,6 +62,9 @@ int main() {
 	writePowerManagement(PM_CONTROL_REG, ( readPowerManagement(PM_CONTROL_REG) & ~PM_SOUND_MUTE ) | PM_SOUND_AMP );
 	powerOn(POWER_SOUND);
 
+	if(isDSiMode())
+		REG_SNDEXTCNT |= SNDEXTCNT_FREQ_47KHZ;
+
 	readUserSettings();
 	ledBlink(0);
 
@@ -87,7 +90,7 @@ int main() {
 
 	setPowerButtonCB(powerButtonCB);
 
-	REG_SNDEXTCNT = 0x8000;
+	//REG_SNDEXTCNT = 0x8000;
 
 	// Keep the ARM7 mostly idle
 	while (!exitflag) {
